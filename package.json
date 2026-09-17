@@ -1,0 +1,24 @@
+{
+  "name": "chestnut-cheer-animation-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npm run build && node dist/server.js",
+    "build": "tsc",
+    "test": "npm run build && node --test dist/*.test.js",
+    "doctor": "npm run build && node dist/doctor.js",
+    "mcp": "npm run build && node dist/mcp.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.23.0",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "ffmpeg-static": "^5.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "typescript": "^7.0.2"
+  }
+}

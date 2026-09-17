@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chestnut & Cheer Animation Studio</title>
+  <style>
+    :root{font-family:Segoe UI,Arial,sans-serif;color:#2e211b;background:#fff9ef}*{box-sizing:border-box}body{margin:0}header{background:#173b30;color:white;padding:24px max(24px,calc((100vw - 1100px)/2))}header h1{margin:0;font-size:2rem}header p{margin:8px 0 0;color:#d9efdd}main{max-width:1100px;margin:28px auto;padding:0 20px}.layout{display:grid;grid-template-columns:minmax(300px,390px) 1fr;gap:24px}.card{background:white;border:1px solid #e5d9c5;border-radius:18px;padding:22px;box-shadow:0 5px 22px #5335130d}h2{margin:0 0 17px;font-size:1.3rem}h3{margin:0 0 8px}.mascot{width:100%;height:260px;object-fit:contain;background:radial-gradient(#eef2da,#e5e4cc);border-radius:12px}label{display:block;font-weight:700;margin-top:16px;margin-bottom:6px}input[type=text],textarea,input[type=file],select{width:100%;font:inherit;border:1px solid #baa991;border-radius:9px;padding:11px;background:white}input[type=checkbox]{width:20px;height:20px;vertical-align:middle;margin-right:8px}label.check{display:flex;align-items:center}textarea{min-height:150px;resize:vertical}small{color:#6b6257;display:block;margin-top:5px}button{font:inherit;font-weight:700;border:0;border-radius:9px;padding:12px 18px;background:#b74c2c;color:white;cursor:pointer}button:hover{background:#913819}button:disabled{opacity:.55;cursor:wait}.secondary{background:#245e4d}.secondary:hover{background:#194636}.notice{padding:12px 15px;border-radius:9px;background:#fff0c6;margin-bottom:18px}.notice.good{background:#e1f3e6}.notice.error{background:#ffe0dc}.empty{color:#6b6257}.job{border:1px solid #e8dfcf;border-radius:12px;padding:16px;margin:0 0 14px}.job-head{display:flex;justify-content:space-between;gap:12px;align-items:start}.badge{font-size:.78rem;text-transform:uppercase;letter-spacing:.07em;padding:6px 9px;border-radius:30px;background:#ece4d7;color:#4d4133;white-space:nowrap}.badge.ready{background:#def1e4;color:#205e3e}.badge.failed{background:#ffe2de;color:#9d302b}.job p{margin:8px 0;color:#5c5248}.preview{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:9px;background:repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/24px 24px}.start-preview{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:9px;background:#0000ff;margin-top:12px}.links{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}.links a{background:#e8eee9;border-radius:7px;padding:8px 10px;color:#14543f;text-decoration:none;font-weight:700}.links a:hover{text-decoration:underline}time{font-size:.85rem;color:#776d62}@media(max-width:780px){.layout{grid-template-columns:1fr}header{padding:22px}}
+  </style>
+</head>
+<body>
+<header><h1>Chestnut & Cheer</h1><p>Mascot Animation Studio · local on your computer</p></header>
+<main>
+  <div id="notice" class="notice">Checking setup…</div>
+  <div class="layout">
+    <section class="card">
+      <h2>Create an animation</h2>
+      <img id="reference-preview" class="mascot" src="/api/mascot" alt="Mascot reference image">
+      <form id="create-form">
+        <label for="title">Animation name</label><input id="title" type="text" value="Gentle idle loop" required maxlength="100">
+        <label class="check" for="loop"><input id="loop" type="checkbox" checked>Make a seamless loop</label>
+        <div id="loop-options">
+          <label for="preset">Motion preset</label><select id="preset"><option value="">Custom motion</option></select>
+          <label for="duration">Clip length</label><select id="duration"><option value="4">4 seconds · simple loop</option><option value="6">6 seconds</option><option value="8">8 seconds</option></select>
+          <label for="model">Veo model</label><select id="model"><option value="veo-3.1-lite-generate-preview">Veo 3.1 Lite · 720p</option><option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast · 720p</option><option value="veo-3.1-generate-preview">Veo 3.1 Standard · 720p</option></select>
+        </div>
+        <label for="image">Mascot reference image (optional)</label><input id="image" type="file" accept="image/png,image/jpeg,image/webp"><small>Leave this blank to use the mascot shown above. You can upload a different mascot.</small>
+        <label for="start-prompt">Change the opening pose, position, props, or design (optional)</label><textarea id="start-prompt" maxlength="1800" placeholder="Example: Seat this chipmunk on the ground, holding a wrapped Christmas present in both hands. Keep his hat, scarf, face, colors, and illustration style."></textarea><small>This makes a new starting image from your mascot reference. Prepare it, check the picture, then generate the animation. Image preparation may use paid Gemini credits.</small>
+        <p><button id="prepare-button" class="secondary" type="button">Prepare starting frame</button></p><div id="prepared" hidden><strong>Prepared starting frame</strong><img id="prepared-image" class="start-preview" alt="Prepared mascot starting pose"><small>Check the pose and props. Change the description and prepare again if needed.</small></div>
+        <label for="action">What happens in the animation?</label><textarea id="action" required maxlength="1800">Perform one gentle idle cycle: breathe subtly, blink once, smile warmly, and make one small natural tail movement before returning to the exact starting pose.</textarea><small>Describe the movement here. For a seated gift opening scene, turn looping off and write: “Unwrap the present and smile at the surprise inside.”</small>
+        <p><button id="create-button" type="submit">Generate animation</button></p>
+        <small>Veo generation can take several minutes. You can close and reopen this page; the job stays in your library.</small>
+      </form>
+    </section>
+    <section class="card"><h2>Animation library</h2><div id="jobs" class="empty">Loading…</div></section>
+  </div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
