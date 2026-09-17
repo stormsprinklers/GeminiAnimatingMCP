@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mascotPath } from './config.js';
 import { LOOP_PRESETS, LOOP_REQUIREMENTS } from './loops.js';
-import { analyzeBoundary, appendLoopBlend, chooseBlendFrames, compareFrames } from './loop-video.js';
+import { analyzeBoundary, appendLoopBlend, chooseBlendFrames, compareFrames, compareVideoToKeyframes } from './loop-video.js';
 import { ffmpeg, inspectVideo, prepareTransparentReference } from './video.js';
 import { animationPrompt, buildVideoRequest, pollAnimation, submitVideoOperation } from './pipeline.js';
 import { createAnimation, jobDir, saveAnimation } from './library.js';
@@ -74,6 +74,22 @@ test('frame score detects mismatches and blend is 6–12 frames', () => {
   assert.equal(result.foregroundPixels, 1);
   assert.equal(chooseBlendFrames(0), 6);
   assert.equal(chooseBlendFrames(100), 12);
+});
+
+test('video endpoints are compared to their separate planned pictures', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'two-keyframes-'));
+  try {
+    const start = join(dir, 'start.png');
+    const end = join(dir, 'end.png');
+    const video = join(dir, 'video.mp4');
+    await run(ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90', '-vf', 'drawbox=x=20:y=30:w=30:h=30:color=red:t=fill', '-frames:v', '1', start]);
+    await run(ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90', '-vf', 'drawbox=x=100:y=30:w=30:h=30:color=red:t=fill', '-frames:v', '1', end]);
+    await run(ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-y', '-loop', '1', '-t', '0.5', '-i', start, '-loop', '1', '-t', '0.5', '-i', end, '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[out]', '-map', '[out]', '-r', '24', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', video]);
+    const correct = await compareVideoToKeyframes(video, start, end);
+    const reversed = await compareVideoToKeyframes(video, end, start);
+    assert.ok(correct.startDifferenceScore < reversed.startDifferenceScore);
+    assert.ok(correct.endDifferenceScore < reversed.endDifferenceScore);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test('blend appends frames, removes audio in export, and preserves WebM alpha', async () => {

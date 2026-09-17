@@ -20,7 +20,7 @@ test('MCP stdio server exposes generation, review, revision, processing, and cat
     await client.connect(transport);
     const tools = await client.listTools();
     const names = new Set(tools.tools.map(tool => tool.name));
-    for (const name of ['prepare_start_frame', 'inspect_prepared_frame', 'generate_animation', 'generate_loop_animation', 'create_loop_variations', 'check_animation', 'list_animations', 'list_loop_presets', 'list_approved_loops', 'preview_loop', 'preview_animation', 'evaluate_loop_quality', 'inspect_animation_frame', 'review_animation', 'revise_animation', 'process_animation', 'reprocess_animation', 'approve_loop', 'catalog_animation']) assert.ok(names.has(name), `${name} missing`);
+    for (const name of ['prepare_start_frame', 'prepare_ending_frame', 'inspect_prepared_frame', 'generate_animation', 'generate_loop_animation', 'create_loop_variations', 'check_animation', 'list_animations', 'list_loop_presets', 'list_approved_loops', 'preview_loop', 'preview_animation', 'evaluate_loop_quality', 'inspect_animation_frame', 'review_animation', 'revise_animation', 'process_animation', 'reprocess_animation', 'approve_loop', 'catalog_animation']) assert.ok(names.has(name), `${name} missing`);
     const result = await client.callTool({ name: 'list_animations', arguments: {} });
     assert.equal(result.isError, undefined);
     assert.equal(result.content[0]?.type, 'text');

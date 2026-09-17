@@ -32,7 +32,7 @@ export interface Animation {
   correctiveBlendApplied?: boolean;
   blendFrames?: number;
   approvalStatus?: ApprovalStatus;
-  outputPaths?: { original?: string; transparent?: string; preview?: string; corrected?: string; startFrame?: string };
+  outputPaths?: { original?: string; transparent?: string; preview?: string; corrected?: string; startFrame?: string; endingFrame?: string };
   estimatedGenerationCostUsd?: number;
   audioDisableRequested?: boolean;
   audioDisableAccepted?: boolean;
@@ -43,6 +43,12 @@ export interface Animation {
   startFramePrompt?: string;
   startFrameModel?: string;
   startFrameImage?: string;
+  endingFrameId?: string;
+  endingFramePrompt?: string;
+  endingFrameModel?: string;
+  endingFrameImage?: string;
+  startFrameMatchScore?: number;
+  endFrameMatchScore?: number;
 }
 
 export function jobDir(id: string): string {

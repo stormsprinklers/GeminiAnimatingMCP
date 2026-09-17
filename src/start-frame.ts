@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 export const START_FRAME_MODEL = 'gemini-3.1-flash-image';
-export interface PreparedFrame { id: string; prompt: string; model: string; sourceImage: string; startFrameImage: string; blueBackgroundPercent: number; createdAt: string; }
+export interface PreparedFrame { id: string; prompt: string; model: string; sourceImage: string; startFrameImage: string; blueBackgroundPercent: number; createdAt: string; role?: 'start' | 'end'; parentFrameId?: string; motionPrompt?: string; }
 
 function preparedDir(id: string): string {
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error('Invalid prepared frame ID.');
@@ -31,6 +31,18 @@ export function buildStartFrameRequest(prompt: string, imageBytes: string, mimeT
   };
 }
 
+export function buildEndingFrameRequest(prompt: string, motionPrompt: string, startBytes: string, originalBytes: string, originalMime: string): GenerateContentParameters {
+  return {
+    model: START_FRAME_MODEL,
+    contents: [
+      { inlineData: { data: startBytes, mimeType: 'image/png' } },
+      { inlineData: { data: originalBytes, mimeType: originalMime } },
+      { text: `The first image is the APPROVED OPENING FRAME of a 2D mascot animation. The second image is the original character reference. Create exactly one ENDING FRAME after this motion: ${motionPrompt.trim()} The requested final state is: ${prompt.trim()} Keep the same character identity, illustration style, camera, framing, character scale and location, clothing, lighting, and solid chroma-blue #0000FF background unless the final-state description explicitly changes an item. Retain the complete character and relevant props fully inside the 16:9 frame. If the character starts seated and the motion does not explicitly require standing, keep the character seated. Show the final pose only, with the action completed. No scenery, floor, cast shadow, gradient, text, extra characters, or blue parts on the character.` }
+    ],
+    config: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '16:9' } }
+  };
+}
+
 export async function measureBlueBackground(path: string): Promise<number> {
   const { stdout } = await run(ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-i', path, '-vf', 'scale=64:36:flags=neighbor', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer', maxBuffer: 1024 * 1024 });
   const pixels = Buffer.from(stdout);
@@ -40,20 +52,16 @@ export async function measureBlueBackground(path: string): Promise<number> {
   return Math.round(blue / (64 * 36) * 10000) / 100;
 }
 
-export async function prepareStartFrame(input: { imagePath: string; prompt: string }, generate?: (request: GenerateContentParameters) => Promise<GenerateContentResponse>): Promise<PreparedFrame> {
-  const prompt = input.prompt.trim();
-  if (prompt.length < 8 || prompt.length > 1800) throw new Error('Describe the new starting pose or design in 8–1800 characters.');
+function imageMime(ext: string): string { return ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.slice(1)}`; }
+
+async function generateAndSave(input: { imagePath: string; prompt: string; request: GenerateContentParameters; role: 'start' | 'end'; parentFrameId?: string; motionPrompt?: string }, generate?: (request: GenerateContentParameters) => Promise<GenerateContentResponse>): Promise<PreparedFrame> {
   const ext = extname(input.imagePath).toLowerCase();
   if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) throw new Error('Use a PNG, JPG, or WebP mascot reference.');
-  const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.slice(1)}`;
-  const source = await readFile(input.imagePath);
-  if (source.length < 100 || source.length > 10 * 1024 * 1024) throw new Error('Mascot image must be between 100 bytes and 10 MB.');
-  const request = buildStartFrameRequest(prompt, source.toString('base64'), mimeType);
-  const response = await (generate || (value => new GoogleGenAI({ apiKey: geminiKey() }).models.generateContent(value)))(request);
+  const response = await (generate || (value => new GoogleGenAI({ apiKey: geminiKey() }).models.generateContent(value)))(input.request);
   const part = response.candidates?.flatMap(candidate => candidate.content?.parts || []).filter(value => !value.thought && value.inlineData?.data && /^image\/(png|jpeg|webp)$/.test(value.inlineData.mimeType || '')).at(-1);
-  if (!part?.inlineData?.data) throw new Error('Gemini did not return a starting image. Try a shorter pose description.');
+  if (!part?.inlineData?.data) throw new Error(`Gemini did not return a ${input.role === 'start' ? 'starting' : 'ending'} image. Try a shorter pose description.`);
   const image = Buffer.from(part.inlineData.data, 'base64');
-  if (image.length < 100 || image.length > 15 * 1024 * 1024) throw new Error('Gemini returned an invalid starting image.');
+  if (image.length < 100 || image.length > 15 * 1024 * 1024) throw new Error('Gemini returned an invalid prepared image.');
   const id = randomUUID();
   const dir = preparedDir(id);
   await mkdir(dir, { recursive: true });
@@ -67,7 +75,29 @@ export async function prepareStartFrame(input: { imagePath: string; prompt: stri
     '-frames:v', '1', join(dir, 'start-frame.png')], { maxBuffer: 4 * 1024 * 1024 });
   const blueBackgroundPercent = await measureBlueBackground(join(dir, 'start-frame.png'));
   if (blueBackgroundPercent < 10) throw new Error('Prepared image did not keep enough solid chroma-blue background. Try describing a full-body character on a plain blue background.');
-  const frame: PreparedFrame = { id, prompt, model: START_FRAME_MODEL, sourceImage, startFrameImage: 'start-frame.png', blueBackgroundPercent, createdAt: new Date().toISOString() };
+  const frame: PreparedFrame = { id, prompt: input.prompt, model: START_FRAME_MODEL, sourceImage, startFrameImage: 'start-frame.png', blueBackgroundPercent, createdAt: new Date().toISOString(), role: input.role, parentFrameId: input.parentFrameId, motionPrompt: input.motionPrompt };
   await writeFile(join(dir, 'metadata.json'), JSON.stringify(frame, null, 2), { mode: 0o600 });
   return frame;
+}
+
+export async function prepareStartFrame(input: { imagePath: string; prompt: string }, generate?: (request: GenerateContentParameters) => Promise<GenerateContentResponse>): Promise<PreparedFrame> {
+  const prompt = input.prompt.trim();
+  if (prompt.length < 8 || prompt.length > 1800) throw new Error('Describe the new starting pose or design in 8–1800 characters.');
+  const ext = extname(input.imagePath).toLowerCase();
+  if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) throw new Error('Use a PNG, JPG, or WebP mascot reference.');
+  const source = await readFile(input.imagePath);
+  if (source.length < 100 || source.length > 10 * 1024 * 1024) throw new Error('Mascot image must be between 100 bytes and 10 MB.');
+  return generateAndSave({ imagePath: input.imagePath, prompt, request: buildStartFrameRequest(prompt, source.toString('base64'), imageMime(ext)), role: 'start' }, generate);
+}
+
+export async function prepareEndingFrame(input: { startFrameId: string; prompt: string; motionPrompt: string }, generate?: (request: GenerateContentParameters) => Promise<GenerateContentResponse>): Promise<PreparedFrame> {
+  const prompt = input.prompt.trim();
+  const motionPrompt = input.motionPrompt.trim();
+  if (prompt.length < 8 || prompt.length > 1800) throw new Error('Describe the final pose or design in 8–1800 characters.');
+  if (motionPrompt.length < 4 || motionPrompt.length > 1800) throw new Error('Describe the animation action in 4–1800 characters before preparing its ending frame.');
+  const start = await getPreparedFrame(input.startFrameId);
+  if (start.frame.role === 'end') throw new Error('Choose a prepared starting frame before creating its ending frame.');
+  const originalExt = extname(start.sourcePath).toLowerCase();
+  const request = buildEndingFrameRequest(prompt, motionPrompt, (await readFile(start.startFramePath)).toString('base64'), (await readFile(start.sourcePath)).toString('base64'), imageMime(originalExt));
+  return generateAndSave({ imagePath: start.startFramePath, prompt, request, role: 'end', parentFrameId: start.frame.id, motionPrompt }, generate);
 }

@@ -28,13 +28,31 @@ export function compareFrames(first: Buffer, last: Buffer): { score: number; for
 }
 
 export async function analyzeBoundary(path: string): Promise<BoundaryAnalysis> {
+  const { first, last, frames } = await readVideoEndpoints(path);
+  return { ...compareFrames(first, last), frames };
+}
+
+async function readVideoEndpoints(path: string): Promise<{ first: Buffer; last: Buffer; frames: number }> {
   const { stdout } = await run(ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-i', path, '-map', '0:v:0', '-an', '-vf', `scale=${WIDTH}:${HEIGHT}:flags=bilinear,format=rgb24`, '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 });
   const bytes = Buffer.from(stdout);
   const frames = Math.floor(bytes.length / FRAME_BYTES);
   if (frames < 2 || bytes.length !== frames * FRAME_BYTES) throw new Error('Could not read first and last video frames.');
   const first = bytes.subarray(0, FRAME_BYTES);
   const last = bytes.subarray((frames - 1) * FRAME_BYTES);
-  return { ...compareFrames(first, last), frames };
+  return { first, last, frames };
+}
+
+async function readImageFrame(path: string): Promise<Buffer> {
+  const { stdout } = await run(ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-i', path, '-vf', `scale=${WIDTH}:${HEIGHT}:flags=bilinear,format=rgb24`, '-frames:v', '1', '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer', maxBuffer: 1024 * 1024 });
+  const pixels = Buffer.from(stdout);
+  if (pixels.length !== FRAME_BYTES) throw new Error('Could not inspect a prepared keyframe.');
+  return pixels;
+}
+
+export async function compareVideoToKeyframes(videoPath: string, startImagePath: string, endImagePath: string): Promise<{ startDifferenceScore: number; endDifferenceScore: number }> {
+  const video = await readVideoEndpoints(videoPath);
+  const [start, end] = await Promise.all([readImageFrame(startImagePath), readImageFrame(endImagePath)]);
+  return { startDifferenceScore: compareFrames(video.first, start).score, endDifferenceScore: compareFrames(video.last, end).score };
 }
 
 export function chooseBlendFrames(score: number): number {

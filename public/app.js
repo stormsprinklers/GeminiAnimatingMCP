@@ -14,9 +14,15 @@ const startPromptInput = document.getElementById('start-prompt');
 const prepareButton = document.getElementById('prepare-button');
 const preparedEl = document.getElementById('prepared');
 const preparedImage = document.getElementById('prepared-image');
+const endOptions = document.getElementById('end-options');
+const endPromptInput = document.getElementById('end-prompt');
+const prepareEndButton = document.getElementById('prepare-end-button');
+const endingPreparedEl = document.getElementById('ending-prepared');
+const endingImage = document.getElementById('ending-image');
 let jobs = [];
 let presets = [];
 let preparedFrameId = '';
+let endingFrameId = '';
 
 function message(text, kind = '') {
   notice.textContent = text;
@@ -50,6 +56,11 @@ function render() {
     if (job.startFramePrompt) {
       card.append(el('p', '', `Starting frame: ${job.startFramePrompt}`));
       const start = el('img', 'start-preview'); start.src = `/api/animations/${job.id}/file/start`; start.alt = 'Prepared starting frame'; card.append(start);
+    }
+    if (job.endingFramePrompt) {
+      card.append(el('p', '', `Ending frame: ${job.endingFramePrompt}`));
+      const end = el('img', 'start-preview'); end.src = `/api/animations/${job.id}/file/end`; end.alt = 'Prepared ending frame'; card.append(end);
+      if (job.startFrameMatchScore !== undefined) card.append(el('p', '', `Veo match to prepared pictures: start ${job.startFrameMatchScore}% difference · end ${job.endFrameMatchScore}% difference`));
     }
     if (job.loopEnabled) card.append(el('p', '', `Loop · ${job.durationSeconds || '?'}s requested · boundary ${job.firstLastDifferenceScore ?? '?'}% raw / ${job.finalBoundaryDifferenceScore ?? '?'}% final · ${job.correctiveBlendApplied ? `${job.blendFrames}-frame blend` : 'no blend'} · ${job.approvalStatus || 'pending'} approval`));
     if (job.status === 'failed') card.append(el('p', '', job.error || 'Generation failed.'));
@@ -87,17 +98,20 @@ form.addEventListener('submit', async event => {
   try {
     const file = imageInput.files[0];
     if (startPromptInput.value.trim() && !preparedFrameId) throw new Error('Prepare and review the new starting frame before generating the video.');
+    if (!loopInput.checked && endPromptInput.value.trim() && !endingFrameId) throw new Error('Prepare and review the ending frame before generating the video.');
     const body = { title: document.getElementById('title').value, action: actionInput.value, loop: loopInput.checked };
     if (loopInput.checked) { body.preset = presetInput.value || undefined; body.durationSeconds = Number(durationInput.value); body.model = modelInput.value; }
     if (preparedFrameId) body.preparedFrameId = preparedFrameId;
     else if (file) body.imageData = await readImage(file);
+    if (!loopInput.checked && endingFrameId) body.endingFrameId = endingFrameId;
     const job = await api('/api/animations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     message(`Animation submitted. Job ${job.id} is in your library.`, 'good');
     await refresh();
   } catch (error) { message(error.message, 'error'); }
   finally { button.disabled = false; }
 });
-function clearPreparedFrame() { preparedFrameId = ''; preparedEl.hidden = true; preparedImage.removeAttribute('src'); }
+function clearEndingFrame() { endingFrameId = ''; endingPreparedEl.hidden = true; endingImage.removeAttribute('src'); }
+function clearPreparedFrame() { preparedFrameId = ''; preparedEl.hidden = true; preparedImage.removeAttribute('src'); clearEndingFrame(); }
 let uploadedPreviewUrl = '';
 imageInput.addEventListener('change', () => {
   clearPreparedFrame();
@@ -106,6 +120,7 @@ imageInput.addEventListener('change', () => {
   referencePreview.src = uploadedPreviewUrl || '/api/mascot';
 });
 startPromptInput.addEventListener('input', clearPreparedFrame);
+endPromptInput.addEventListener('input', clearEndingFrame);
 prepareButton.addEventListener('click', async () => {
   prepareButton.disabled = true; message('Preparing the new starting pose from your mascot image…');
   try {
@@ -121,9 +136,24 @@ prepareButton.addEventListener('click', async () => {
   } catch (error) { message(error.message, 'error'); }
   finally { prepareButton.disabled = false; }
 });
+prepareEndButton.addEventListener('click', async () => {
+  prepareEndButton.disabled = true; message('Preparing the exact ending pose from both mascot pictures…');
+  try {
+    if (loopInput.checked) throw new Error('Turn looping off to use a different ending pose.');
+    if (!preparedFrameId) throw new Error('Prepare and review a starting frame first.');
+    const prompt = endPromptInput.value.trim();
+    if (prompt.length < 8) throw new Error('Describe the ending pose in at least 8 characters.');
+    const prepared = await api('/api/prepared-frames/end', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ startFrameId: preparedFrameId, prompt, action: actionInput.value }) });
+    endingFrameId = prepared.id;
+    endingImage.src = `/api/prepared-frames/${prepared.id}/image`;
+    endingPreparedEl.hidden = false;
+    message('Ending frame is ready. Check both pictures, then generate the animation.', 'good');
+  } catch (error) { message(error.message, 'error'); }
+  finally { prepareEndButton.disabled = false; }
+});
 api('/api/setup').then(setup => message(setup.keyReady ? 'Ready to generate. Your API key is loaded and its value is hidden.' : 'Add your Gemini API key to the .env file, save it, then refresh this page.', setup.keyReady ? 'good' : '')).catch(error => message(error.message, 'error'));
 api('/api/loop-presets').then(items => { presets = items; for (const preset of items) { const option = el('option', '', preset.label); option.value = preset.id; presetInput.append(option); } }).catch(() => {});
-loopInput.addEventListener('change', () => { loopOptions.hidden = !loopInput.checked; });
-presetInput.addEventListener('change', () => { const preset = presets.find(item => item.id === presetInput.value); if (preset) { actionInput.value = preset.action; durationInput.value = String(preset.durationSeconds); } });
-actionInput.addEventListener('input', () => { presetInput.value = ''; });
+loopInput.addEventListener('change', () => { loopOptions.hidden = !loopInput.checked; endOptions.hidden = loopInput.checked; });
+presetInput.addEventListener('change', () => { const preset = presets.find(item => item.id === presetInput.value); if (preset) { actionInput.value = preset.action; durationInput.value = String(preset.durationSeconds); clearEndingFrame(); } });
+actionInput.addEventListener('input', () => { presetInput.value = ''; clearEndingFrame(); });
 refresh(); setInterval(refresh, 10_000);

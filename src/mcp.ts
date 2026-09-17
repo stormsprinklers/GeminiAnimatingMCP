@@ -11,18 +11,23 @@ import { pollAnimation, reprocessLoop, startAnimation } from './pipeline.js';
 import { chromaKey, ffmpeg, inspectVideo, measureTransparency } from './video.js';
 import { analyzeBoundary, LOOP_DIFFERENCE_THRESHOLD } from './loop-video.js';
 import { LOOP_PRESETS } from './loops.js';
-import { getPreparedFrame, prepareStartFrame } from './start-frame.js';
+import { getPreparedFrame, prepareEndingFrame, prepareStartFrame } from './start-frame.js';
 
 const run = promisify(execFile);
 const textResult = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] });
 
 function makeServer(): McpServer {
-  const server = new McpServer({ name: 'chestnut-cheer-animations', version: '1.2.0' }, { instructions: 'For a new mascot pose, prop, or design, call prepare_start_frame, inspect_prepared_frame, then pass preparedFrameId to generate_animation or generate_loop_animation. Check status until ready, preview_loop continuously, evaluate_loop_quality, review, revise, reprocess, and approve the best version. Image preparation and Veo generation may use paid API credits.' });
+  const server = new McpServer({ name: 'chestnut-cheer-animations', version: '1.3.0' }, { instructions: 'For a new mascot pose, call prepare_start_frame and inspect_prepared_frame. For a non-loop animation with a controlled ending, call prepare_ending_frame from that starting frame and inspect it; then pass both frame IDs to generate_animation with loop=false. Loops must use the same frame at both ends. Check status until ready, preview, review, revise, reprocess, and catalog. Image preparation and Veo generation may use paid API credits.' });
 
   server.registerTool('prepare_start_frame', {
     title: 'Prepare a new mascot starting frame', description: 'Edit the supplied mascot reference into a new pose, position, prop, or design before video generation. Saves an image for review; this image-generation call may incur charges.',
     inputSchema: z.object({ prompt: z.string().min(8).max(1800), imagePath: z.string().optional() })
   }, async ({ prompt, imagePath }) => { const frame = await prepareStartFrame({ imagePath: imagePath || mascotPath, prompt }); return textResult({ ...frame, previewUrl: `http://127.0.0.1:4177/api/prepared-frames/${frame.id}/image` }); });
+
+  server.registerTool('prepare_ending_frame', {
+    title: 'Prepare a controlled ending frame', description: 'Generate an ending pose from an approved starting frame and the planned motion. Review it before Veo generation; this image-generation call may incur charges.',
+    inputSchema: z.object({ startFrameId: z.string().uuid(), prompt: z.string().min(8).max(1800), action: z.string().min(4).max(1800) })
+  }, async ({ startFrameId, prompt, action }) => { const frame = await prepareEndingFrame({ startFrameId, prompt, motionPrompt: action }); return textResult({ ...frame, previewUrl: `http://127.0.0.1:4177/api/prepared-frames/${frame.id}/image` }); });
 
   server.registerTool('inspect_prepared_frame', {
     title: 'Inspect prepared starting frame', description: 'Show the prompt-edited starting image before spending Veo credits.', inputSchema: z.object({ id: z.string().uuid() }), annotations: { readOnlyHint: true }
@@ -30,8 +35,8 @@ function makeServer(): McpServer {
 
   server.registerTool('generate_animation', {
     title: 'Generate mascot animation', description: 'Submit the Chestnut & Cheer squirrel reference image and motion description to Gemini Veo. Returns a saved animation ID; generation may incur charges.',
-    inputSchema: z.object({ title: z.string().min(2).max(100), action: z.string().min(4).max(1800), loop: z.boolean().default(false), preset: z.string().optional(), durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).optional(), model: z.string().optional(), preparedFrameId: z.string().uuid().optional(), imagePath: z.string().optional() })
-  }, async ({ title, action, loop, preset, durationSeconds, model, preparedFrameId, imagePath }) => textResult(await startAnimation({ title, action, imagePath: imagePath || mascotPath, preparedFrameId, loop, preset, durationSeconds, model })));
+    inputSchema: z.object({ title: z.string().min(2).max(100), action: z.string().min(4).max(1800), loop: z.boolean().default(false), preset: z.string().optional(), durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).optional(), model: z.string().optional(), preparedFrameId: z.string().uuid().optional(), endingFrameId: z.string().uuid().optional(), imagePath: z.string().optional() })
+  }, async ({ title, action, loop, preset, durationSeconds, model, preparedFrameId, endingFrameId, imagePath }) => textResult(await startAnimation({ title, action, imagePath: imagePath || mascotPath, preparedFrameId, endingFrameId, loop, preset, durationSeconds, model })));
 
   server.registerTool('list_loop_presets', {
     title: 'List loop presets', description: 'Show the ten loop-friendly mascot motion presets and suggested clip lengths.', inputSchema: z.object({}), annotations: { readOnlyHint: true }
@@ -111,8 +116,8 @@ function makeServer(): McpServer {
 
   server.registerTool('revise_animation', {
     title: 'Revise mascot animation', description: 'Generate a new Veo animation from the same reference image, linked to its parent. This may incur charges.',
-    inputSchema: z.object({ parentId: z.string().uuid(), title: z.string().min(2).max(100), action: z.string().min(4).max(1800), loop: z.boolean().optional(), durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).optional(), model: z.string().optional(), preparedFrameId: z.string().uuid().optional() })
-  }, async ({ parentId, title, action, loop, durationSeconds, model, preparedFrameId }) => { const parent = await getAnimation(parentId); return textResult(await startAnimation({ title, action, imagePath: join(jobDir(parentId), parent.sourceImage), preparedFrameId: preparedFrameId || parent.preparedFrameId, parentId, loop: loop ?? parent.loopEnabled, durationSeconds: durationSeconds || parent.durationSeconds, model: model || parent.model })); });
+    inputSchema: z.object({ parentId: z.string().uuid(), title: z.string().min(2).max(100), action: z.string().min(4).max(1800), loop: z.boolean().optional(), durationSeconds: z.union([z.literal(4), z.literal(6), z.literal(8)]).optional(), model: z.string().optional(), preparedFrameId: z.string().uuid().optional(), endingFrameId: z.string().uuid().optional() })
+  }, async ({ parentId, title, action, loop, durationSeconds, model, preparedFrameId, endingFrameId }) => { const parent = await getAnimation(parentId); const startId = preparedFrameId || parent.preparedFrameId; const isLoop = loop ?? parent.loopEnabled; return textResult(await startAnimation({ title, action, imagePath: join(jobDir(parentId), parent.sourceImage), preparedFrameId: startId, endingFrameId: isLoop ? undefined : endingFrameId || (startId === parent.preparedFrameId ? parent.endingFrameId : undefined), parentId, loop: isLoop, durationSeconds: durationSeconds || parent.durationSeconds, model: model || parent.model })); });
 
   server.registerTool('process_animation', {
     title: 'Refine transparent export', description: 'Reprocess an existing original MP4 with adjustable blue-screen removal. Keeps previous exports in the animation folder.',

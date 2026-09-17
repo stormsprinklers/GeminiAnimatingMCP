@@ -6,7 +6,7 @@ import { geminiKey, libraryRoot, mascotPath, root } from './config.js';
 import { getAnimation, jobDir, listAnimations, saveAnimation } from './library.js';
 import { pollAnimation, startAnimation } from './pipeline.js';
 import { LOOP_PRESETS } from './loops.js';
-import { getPreparedFrame, prepareStartFrame } from './start-frame.js';
+import { getPreparedFrame, prepareEndingFrame, prepareStartFrame } from './start-frame.js';
 
 const host = '127.0.0.1';
 const port = Number(process.env.PORT || 4177);
@@ -87,6 +87,11 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     finally { if (image.temporary) await rm(image.path, { force: true }); }
     return;
   }
+  if (req.method === 'POST' && url.pathname === '/api/prepared-frames/end') {
+    const body = await jsonBody(req);
+    send(res, 201, await prepareEndingFrame({ startFrameId: String(body.startFrameId || ''), prompt: String(body.prompt || ''), motionPrompt: String(body.action || '') }));
+    return;
+  }
   if (req.method === 'GET' && segments[0] === 'api' && segments[1] === 'prepared-frames' && segments[2] && segments.length === 4 && segments[3] === 'image') {
     const prepared = await getPreparedFrame(segments[2]);
     const data = await readFile(prepared.startFramePath);
@@ -103,7 +108,8 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         loop: body.loop === true, preset: typeof body.preset === 'string' ? body.preset : undefined,
         durationSeconds: Number(body.durationSeconds || 4) as 4 | 6 | 8,
         model: typeof body.model === 'string' ? body.model : undefined,
-        preparedFrameId: typeof body.preparedFrameId === 'string' ? body.preparedFrameId : undefined });
+        preparedFrameId: typeof body.preparedFrameId === 'string' ? body.preparedFrameId : undefined,
+        endingFrameId: typeof body.endingFrameId === 'string' ? body.endingFrameId : undefined });
       send(res, 201, job);
     } finally { if (image.temporary) await rm(image.path, { force: true }); }
     return;
@@ -113,7 +119,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'GET' && segments.length === 3) { send(res, 200, await pollAnimation(id)); return; }
     if (req.method === 'GET' && segments[3] === 'file' && segments[4] && segments.length === 5) {
       const job = await getAnimation(id);
-      const filename = ({ source: job.sourceImage, start: job.startFrameImage, reference: job.loopEnabled ? 'loop-reference.png' : 'keyed-reference.png', original: job.rawVideo, corrected: job.correctiveBlendApplied ? 'loop-corrected.mp4' : job.rawVideo, transparent: job.transparentVideo } as Record<string, string | undefined>)[segments[4]];
+      const filename = ({ source: job.sourceImage, start: job.startFrameImage, end: job.endingFrameImage, reference: job.loopEnabled ? 'loop-reference.png' : 'keyed-reference.png', original: job.rawVideo, corrected: job.correctiveBlendApplied ? 'loop-corrected.mp4' : job.rawVideo, transparent: job.transparentVideo } as Record<string, string | undefined>)[segments[4]];
       if (!filename) { send(res, 404, { error: 'File is not ready.' }); return; }
       const data = await readFile(join(jobDir(id), filename));
       const extension = filename.split('.').pop() || 'png';
@@ -130,11 +136,14 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method === 'POST' && segments[3] === 'revise' && segments.length === 4) {
       const body = await jsonBody(req);
       const parent = await getAnimation(id);
+      const preparedFrameId = typeof body.preparedFrameId === 'string' ? body.preparedFrameId : parent.preparedFrameId;
+      const loop = typeof body.loop === 'boolean' ? body.loop : parent.loopEnabled;
       const job = await startAnimation({ title: String(body.title || `${parent.title} revision`), action: String(body.action || ''), imagePath: join(jobDir(id), parent.sourceImage), parentId: id,
-        loop: typeof body.loop === 'boolean' ? body.loop : parent.loopEnabled, preset: typeof body.preset === 'string' ? body.preset : undefined,
+        loop, preset: typeof body.preset === 'string' ? body.preset : undefined,
         durationSeconds: Number(body.durationSeconds || parent.durationSeconds || 4) as 4 | 6 | 8,
         model: typeof body.model === 'string' ? body.model : parent.model,
-        preparedFrameId: typeof body.preparedFrameId === 'string' ? body.preparedFrameId : parent.preparedFrameId });
+        preparedFrameId,
+        endingFrameId: loop ? undefined : typeof body.endingFrameId === 'string' ? body.endingFrameId : preparedFrameId === parent.preparedFrameId ? parent.endingFrameId : undefined });
       send(res, 201, job); return;
     }
   }

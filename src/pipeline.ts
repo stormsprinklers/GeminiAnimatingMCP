@@ -5,7 +5,7 @@ import { geminiKey, veoModel } from './config.js';
 import { createAnimation, getAnimation, jobDir, saveAnimation, type Animation } from './library.js';
 import { chromaKey, inspectVideo, measureTransparency, prepareReference } from './video.js';
 import { LOOP_REQUIREMENTS, loopPreset } from './loops.js';
-import { analyzeBoundary, appendLoopBlend, chooseBlendFrames, LOOP_DIFFERENCE_THRESHOLD } from './loop-video.js';
+import { analyzeBoundary, appendLoopBlend, chooseBlendFrames, compareVideoToKeyframes, LOOP_DIFFERENCE_THRESHOLD } from './loop-video.js';
 import { getPreparedFrame } from './start-frame.js';
 
 const active = new Set<string>();
@@ -13,22 +13,23 @@ const POLL_MS = 10_000;
 
 function client(): GoogleGenAI { return new GoogleGenAI({ apiKey: geminiKey() }); }
 
-export function animationPrompt(action: string, loop = false): string {
+export function animationPrompt(action: string, loop = false, endingFramePrompt?: string): string {
   if (loop) return `${action.trim()} ${LOOP_REQUIREMENTS} Keep the background a perfectly solid uniform chroma blue #0000FF on every generated frame, with no shadows, gradients, scenery, text, or camera movement.`;
-  return `Animate the exact character from the supplied starting image. Begin in that image's pose, position, clothing, and design. Preserve the recognizable character design and illustration style except for changes explicitly requested. ${action.trim()} Keep the complete character and any requested props visible, with a fixed camera. Smooth expressive 2D character animation. Keep the backdrop perfectly flat uniform saturated chroma blue (#0000FF) throughout every frame, with no gradient, texture, shadows, blue objects, extra characters, text, logos, or scene changes.`;
+  return `Animate the exact character from the supplied starting image. Begin in that image's pose, position, clothing, and design. Preserve the recognizable character design and illustration style except for changes explicitly requested. ${action.trim()} ${endingFramePrompt ? `Finish in the separately supplied ending frame: ${endingFramePrompt.trim()} Follow a natural continuous motion between the two supplied poses, and keep the character's position and body posture consistent unless the action explicitly changes them.` : ''} Keep the complete character and any requested props visible, with a fixed camera. Smooth expressive 2D character animation. Keep the backdrop perfectly flat uniform saturated chroma blue (#0000FF) throughout every frame, with no gradient, texture, shadows, blue objects, extra characters, text, logos, or scene changes.`;
 }
 
 const models = ['veo-3.1-generate-preview', 'veo-3.1-fast-generate-preview', 'veo-3.1-lite-generate-preview'];
-export interface StartAnimationInput { title: string; action: string; imagePath: string; preparedFrameId?: string; parentId?: string; loop?: boolean; preset?: string; durationSeconds?: 4 | 6 | 8; model?: string; }
+export interface StartAnimationInput { title: string; action: string; imagePath: string; preparedFrameId?: string; endingFrameId?: string; parentId?: string; loop?: boolean; preset?: string; durationSeconds?: 4 | 6 | 8; model?: string; }
 
-export function buildVideoRequest(job: Animation, imageBytes: string, includeAudioSetting = true): GenerateVideosParameters {
+export function buildVideoRequest(job: Animation, imageBytes: string, includeAudioSetting = true, endImageBytes?: string): GenerateVideosParameters {
   const image = { imageBytes, mimeType: 'image/png' };
+  const usesLastFrame = !!job.loopEnabled || !!job.endingFrameId;
   return {
     model: job.model,
     source: { prompt: job.prompt, image },
     config: {
       numberOfVideos: 1, durationSeconds: job.durationSeconds || 8, aspectRatio: '16:9', resolution: '720p',
-      ...(job.loopEnabled ? { lastFrame: image, ...(includeAudioSetting ? { generateAudio: false } : {}) } : {})
+      ...(usesLastFrame ? { lastFrame: { imageBytes: endImageBytes || imageBytes, mimeType: 'image/png' }, ...(includeAudioSetting ? { generateAudio: false } : {}) } : {})
     }
   };
 }
@@ -37,8 +38,9 @@ function unsupportedUseCase(error: unknown): boolean {
   return /Your use case is currently not supported|lastFrame|last frame|interpolat|generateAudio|audio.*(?:unsupported|not supported|must be true)/i.test(safeError(error));
 }
 
-export async function submitVideoOperation(job: Animation, imageBytes: string, generate: (request: GenerateVideosParameters) => Promise<GenerateVideosOperation>): Promise<GenerateVideosOperation> {
-  if (!job.loopEnabled) return generate(buildVideoRequest(job, imageBytes));
+export async function submitVideoOperation(job: Animation, imageBytes: string, generate: (request: GenerateVideosParameters) => Promise<GenerateVideosOperation>, endImageBytes?: string): Promise<GenerateVideosOperation> {
+  if (job.endingFrameId && !endImageBytes) throw new Error('The prepared ending frame image is missing.');
+  if (!job.loopEnabled && !job.endingFrameId) return generate(buildVideoRequest(job, imageBytes));
   const requested = job.durationSeconds || 4;
   const durations: (4 | 6 | 8)[] = requested === 8 ? [8] : [requested, 8];
   let lastError: unknown;
@@ -47,7 +49,7 @@ export async function submitVideoOperation(job: Animation, imageBytes: string, g
     for (const includeAudioSetting of [true, false]) {
       job.audioDisableRequested = true;
       try {
-        const operation = await generate(buildVideoRequest(job, imageBytes, includeAudioSetting));
+        const operation = await generate(buildVideoRequest(job, imageBytes, includeAudioSetting, endImageBytes));
         job.audioDisableAccepted = includeAudioSetting;
         return operation;
       } catch (error) {
@@ -56,11 +58,13 @@ export async function submitVideoOperation(job: Animation, imageBytes: string, g
       }
     }
   }
-  throw new Error(`Selected model ${job.model} rejected first/last-frame looping at ${requested} and 8 seconds: ${safeError(lastError)}`);
+  throw new Error(`Selected model ${job.model} rejected first/last-frame generation at ${requested} and 8 seconds: ${safeError(lastError)}`);
 }
 
 export async function startAnimation(input: StartAnimationInput, videoGenerator?: (request: GenerateVideosParameters) => Promise<GenerateVideosOperation>): Promise<Animation> {
   if (input.title.trim().length < 2 || input.title.length > 100) throw new Error('Title must be 2–100 characters.');
+  if (input.loop && input.endingFrameId) throw new Error('A seamless loop must end on its starting frame. Turn looping off to use a different ending frame.');
+  if (input.endingFrameId && !input.preparedFrameId) throw new Error('Prepare a starting frame before selecting a different ending frame.');
   const preset = input.loop ? loopPreset(input.preset) : undefined;
   if (input.loop && input.preset && !preset) throw new Error('Unknown loop preset.');
   const action = input.action?.trim() || preset?.action || '';
@@ -71,21 +75,27 @@ export async function startAnimation(input: StartAnimationInput, videoGenerator?
   if (!models.includes(model)) throw new Error('Selected model is not a supported Veo 3.1 model for first/last-frame generation.');
   if (!videoGenerator) geminiKey();
   const prepared = input.preparedFrameId ? await getPreparedFrame(input.preparedFrameId) : undefined;
-  const job = await createAnimation({ title: input.title, prompt: animationPrompt(action, !!input.loop), imagePath: prepared?.sourcePath || input.imagePath, model, parentId: input.parentId, loopEnabled: input.loop, loopPreset: preset?.id, durationSeconds });
+  if (prepared?.frame.role === 'end') throw new Error('Choose a prepared starting frame for the beginning of the animation.');
+  const ending = input.endingFrameId ? await getPreparedFrame(input.endingFrameId) : undefined;
+  if (ending && (ending.frame.role !== 'end' || ending.frame.parentFrameId !== input.preparedFrameId)) throw new Error('The ending frame must be prepared from the selected starting frame.');
+  const job = await createAnimation({ title: input.title, prompt: animationPrompt(action, !!input.loop, ending?.frame.prompt), imagePath: prepared?.sourcePath || input.imagePath, model, parentId: input.parentId, loopEnabled: input.loop, loopPreset: preset?.id, durationSeconds });
   job.requestedDurationSeconds = durationSeconds;
   if (prepared) { job.preparedFrameId = prepared.frame.id; job.startFramePrompt = prepared.frame.prompt; job.startFrameModel = prepared.frame.model; job.startFrameImage = 'start-frame.png'; }
+  if (ending) { job.endingFrameId = ending.frame.id; job.endingFramePrompt = ending.frame.prompt; job.endingFrameModel = ending.frame.model; job.endingFrameImage = 'end-frame.png'; }
   try {
     const dir = jobDir(job.id);
     const reference = input.loop ? 'loop-reference.png' : 'keyed-reference.png';
     if (prepared) await copyFile(prepared.startFramePath, join(dir, reference));
     else await prepareReference(join(dir, job.sourceImage), join(dir, reference));
     if (prepared) { await copyFile(prepared.startFramePath, join(dir, job.startFrameImage!)); job.outputPaths = { ...job.outputPaths, startFrame: join(dir, job.startFrameImage!) }; }
+    if (ending) { await copyFile(ending.startFramePath, join(dir, job.endingFrameImage!)); job.outputPaths = { ...job.outputPaths, endingFrame: join(dir, job.endingFrameImage!) }; }
     if (input.loop) job.loopReferenceMode = prepared ? 'same prompt-prepared blue starting frame at both endpoints' : 'same blue-composited frame from transparent source at both endpoints';
     const imageBytes = (await readFile(join(dir, reference))).toString('base64');
-    const operation = await submitVideoOperation(job, imageBytes, videoGenerator || (request => client().models.generateVideos(request)));
+    const endImageBytes = ending ? (await readFile(join(dir, job.endingFrameImage!))).toString('base64') : undefined;
+    const operation = await submitVideoOperation(job, imageBytes, videoGenerator || (request => client().models.generateVideos(request)), endImageBytes);
     if (!operation.name) throw new Error('Veo did not provide a job ID.');
     job.operationName = operation.name;
-    if (input.loop) job.lastFrameAccepted = true;
+    if (input.loop || ending) job.lastFrameAccepted = true;
     job.status = 'generating';
     await saveAnimation(job);
     if (operation.done) await finishOperation(job, operation);
@@ -124,6 +134,11 @@ async function processDownloaded(job: Animation): Promise<void> {
   const dir = jobDir(job.id);
   const raw = join(dir, job.rawVideo);
   let source = raw;
+  if (job.endingFrameImage && job.startFrameImage) {
+    const scores = await compareVideoToKeyframes(raw, join(dir, job.startFrameImage), join(dir, job.endingFrameImage));
+    job.startFrameMatchScore = scores.startDifferenceScore;
+    job.endFrameMatchScore = scores.endDifferenceScore;
+  }
   if (job.loopEnabled) {
     const boundary = await analyzeBoundary(raw);
     job.firstLastDifferenceScore = boundary.score;
