@@ -17,7 +17,7 @@ const run = promisify(execFile);
 const textResult = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] });
 
 function makeServer(): McpServer {
-  const server = new McpServer({ name: 'chestnut-cheer-animations', version: '1.3.0' }, { instructions: 'For a new mascot pose, call prepare_start_frame and inspect_prepared_frame. For a non-loop animation with a controlled ending, call prepare_ending_frame from that starting frame and inspect it; then pass both frame IDs to generate_animation with loop=false. Loops must use the same frame at both ends. Check status until ready, preview, review, revise, reprocess, and catalog. Image preparation and Veo generation may use paid API credits.' });
+  const server = new McpServer({ name: 'mascot_animations', version: '1.3.0' }, { instructions: 'For a new mascot pose, call prepare_start_frame and inspect_prepared_frame. For a non-loop animation with a controlled ending, call prepare_ending_frame from that starting frame and inspect it; then pass both frame IDs to generate_animation with loop=false. Loops must use the same frame at both ends. Check status until ready, preview, review, revise, reprocess, and catalog. Image preparation and Veo generation may use paid API credits.' });
 
   server.registerTool('prepare_start_frame', {
     title: 'Prepare a new mascot starting frame', description: 'Edit the supplied mascot reference into a new pose, position, prop, or design before video generation. Saves an image for review; this image-generation call may incur charges.',

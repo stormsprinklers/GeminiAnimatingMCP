@@ -1,6 +1,6 @@
 # Copy this file to config.toml after cloning the project.
 # Replace the paths with the absolute locations on your computer.
-[mcp_servers.chestnut_cheer_animations]
+[mcp_servers.mascot_animations]
 command = 'C:\Program Files\nodejs\node.exe'
 args = ['C:\absolute\path\to\Gemini MCP\dist\mcp.js']
 cwd = 'C:\absolute\path\to\Gemini MCP'
